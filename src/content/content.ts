@@ -62,35 +62,16 @@ function getRoot(): HTMLElement {
    PROBLEM NUMBER + TITLE
 ======================================================= */
 
-function isElementVisible(element: Element): boolean {
-  const htmlElement = element as HTMLElement;
-  const style = window.getComputedStyle(htmlElement);
-  const rect = htmlElement.getBoundingClientRect();
-
-  return (
-    style.display !== "none" &&
-    style.visibility !== "hidden" &&
-    style.opacity !== "0" &&
-    rect.width > 0 &&
-    rect.height > 0
-  );
-}
-
-function getDocumentProblemTitle(): string {
-  return document.title
-    .replace(/\s*-\s*LeetCode.*$/i, "")
-    .replace(/\s*\|\s*LeetCode.*$/i, "")
-    .trim();
-}
-
 function getProblemNumberAndTitle(): {
   number: string;
   title: string;
 } {
   /*
-   * LeetCode is a SPA. During navigation, old React nodes can
-   * temporarily remain in the DOM. Prefer visible nodes and use
-   * the current document title as the title fallback.
+   * LeetCode has changed its DOM structure several times.
+   *
+   * We first check the known question-title selector,
+   * then h1 elements, then scan visible elements for
+   * the "3. Problem Title" pattern.
    */
 
   const possibleElements: Element[] = [];
@@ -99,88 +80,108 @@ function getProblemNumberAndTitle(): {
     '[data-cy="question-title"]'
   );
 
-  if (questionTitle && isElementVisible(questionTitle)) {
+  if (questionTitle) {
     possibleElements.push(questionTitle);
   }
 
   const h1Elements = document.querySelectorAll("h1");
 
   for (const element of Array.from(h1Elements)) {
-    if (isElementVisible(element)) {
-      possibleElements.push(element);
-    }
+    possibleElements.push(element);
   }
 
-  const titleCandidates = document.querySelectorAll(
-    '[class*="title"], [class*="Title"]'
-  );
+  const titleCandidates =
+    document.querySelectorAll(
+      '[class*="title"], [class*="Title"]'
+    );
 
   for (const element of Array.from(titleCandidates)) {
-    if (isElementVisible(element)) {
-      possibleElements.push(element);
-    }
+    possibleElements.push(element);
   }
 
   /*
-   * First choice: visible numbered problem title.
+   * Try to find an element whose text actually contains
+   * the problem number.
    */
 
   for (const element of possibleElements) {
-    const text = element.textContent?.trim() || "";
-    const match = text.match(/^(\d+)\.\s*(.+)$/);
+    const text =
+      element.textContent?.trim() || "";
+
+    const match = text.match(
+      /^(\d+)\.\s*(.+)$/
+    );
 
     if (match) {
       return {
         number: match[1],
-        title: match[2].trim(),
+        title: match[2].trim()
       };
     }
   }
 
   /*
-   * Second choice: current browser title for the problem name,
-   * while looking for the number only in visible elements.
+   * Fallback: scan visible text elements.
+   *
+   * This is particularly useful with the current
+   * LeetCode layout where the problem title can be
+   * rendered through nested components.
    */
 
-  const currentTitle = getDocumentProblemTitle();
+  const textElements =
+    document.querySelectorAll(
+      "div, span, a"
+    );
 
-  const visibleTextElements = document.querySelectorAll(
-    "div, span, a"
-  );
+  for (const element of Array.from(textElements)) {
+    const text =
+      element.textContent?.trim() || "";
 
-  for (const element of Array.from(visibleTextElements)) {
-    if (!isElementVisible(element)) {
-      continue;
-    }
+    /*
+     * Avoid huge containers. We only want short
+     * pieces of text that look like a problem title.
+     */
 
-    const text = element.textContent?.trim() || "";
-
-    if (text.length > 3 && text.length < 150) {
-      const match = text.match(/^(\d+)\.\s*(.+)$/);
+    if (
+      text.length > 3 &&
+      text.length < 150
+    ) {
+      const match = text.match(
+        /^(\d+)\.\s*(.+)$/
+      );
 
       if (match) {
         return {
           number: match[1],
-          title: currentTitle || match[2].trim(),
+          title: match[2].trim()
         };
       }
     }
   }
 
   /*
-   * Last fallback: metadata for the numeric ID.
-   * This comes after visible DOM detection because stale SPA
-   * metadata can exist temporarily during navigation.
+   * Last fallback:
+   *
+   * Some LeetCode pages have the problem number
+   * available in the URL/page metadata.
    */
 
-  const numberFromMetadata = extractProblemNumberFromUrl();
+  const numberFromUrl =
+    extractProblemNumberFromUrl();
+
+  const rawTitle =
+    document.title
+      .replace(
+        /\s*-\s*LeetCode.*$/i,
+        ""
+      )
+      .trim();
 
   return {
-    number: numberFromMetadata || "—",
-    title: currentTitle,
+    number: numberFromUrl || "—",
+    title: rawTitle
   };
 }
-
 
 /* =======================================================
    NUMBER FROM URL / METADATA
@@ -256,31 +257,33 @@ function getDifficulty(): string {
   ];
 
   for (const selector of selectors) {
-    const elements = document.querySelectorAll(selector);
+    const elements =
+      document.querySelectorAll(selector);
 
     for (const element of Array.from(elements)) {
-      if (!isElementVisible(element)) {
-        continue;
-      }
+      const text =
+        element.textContent?.trim() || "";
 
-      const text = element.textContent?.trim() || "";
-
-      if (/^(Easy|Medium|Hard)$/i.test(text)) {
+      if (
+        /^(Easy|Medium|Hard)$/i.test(text)
+      ) {
         return capitalize(text);
       }
     }
   }
 
-  const allElements = document.querySelectorAll(
-    "span, div, button"
-  );
+  /*
+   * Current LeetCode layout fallback.
+   */
+
+  const allElements =
+    document.querySelectorAll(
+      "span, div, button"
+    );
 
   for (const element of Array.from(allElements)) {
-    if (!isElementVisible(element)) {
-      continue;
-    }
-
-    const text = element.textContent?.trim() || "";
+    const text =
+      element.textContent?.trim() || "";
 
     if (
       text === "Easy" ||
@@ -293,7 +296,6 @@ function getDifficulty(): string {
 
   return "Unknown";
 }
-
 
 /* =======================================================
    LANGUAGE
@@ -309,15 +311,15 @@ function getSelectedLanguage(): string {
   ];
 
   for (const selector of selectors) {
-    const elements = document.querySelectorAll(selector);
+    const elements =
+      document.querySelectorAll(selector);
 
     for (const element of Array.from(elements)) {
-      if (!isElementVisible(element)) {
-        continue;
-      }
+      const text =
+        element.textContent?.trim() || "";
 
-      const text = element.textContent?.trim() || "";
-      const language = extractLanguage(text);
+      const language =
+        extractLanguage(text);
 
       if (language) {
         return language;
@@ -325,17 +327,21 @@ function getSelectedLanguage(): string {
     }
   }
 
-  const buttons = document.querySelectorAll(
-    "button, [role='button']"
-  );
+  /*
+   * Current editor header fallback.
+   */
+
+  const buttons =
+    document.querySelectorAll(
+      "button, [role='button']"
+    );
 
   for (const element of Array.from(buttons)) {
-    if (!isElementVisible(element)) {
-      continue;
-    }
+    const text =
+      element.textContent?.trim() || "";
 
-    const text = element.textContent?.trim() || "";
-    const language = extractLanguage(text);
+    const language =
+      extractLanguage(text);
 
     if (language) {
       return language;
@@ -344,7 +350,6 @@ function getSelectedLanguage(): string {
 
   return "Unknown";
 }
-
 
 /* =======================================================
    LANGUAGE HELPERS
@@ -923,15 +928,29 @@ function getGitHubIconSvg(): string {
 }
 
 function handleGitHubClick(): void {
-  const githubConnected =
-    localStorage.getItem("algoforge-github-connected") === "true";
+  chrome.runtime.sendMessage(
+    { type: "GITHUB_STATUS" },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        console.error(
+          "[AlgoForge] GitHub status error:",
+          chrome.runtime.lastError
+        );
 
-  if (!githubConnected) {
-    showGitHubConnectPanel();
-    return;
-  }
+        showGitHubConnectPanel();
+        return;
+      }
 
-  showGitHubRevisionPanel();
+      console.log("[AlgoForge] GitHub status response:", response);
+
+      if (response?.connected === true) {
+        showGitHubRevisionPanel();
+        return;
+      }
+
+      showGitHubConnectPanel();
+    }
+  );
 }
 
 function showGitHubConnectPanel(): void {
@@ -1002,14 +1021,40 @@ function showGitHubConnectPanel(): void {
     ?.addEventListener("click", renderLauncher);
 
   document
-    .getElementById("algoforge-connect-github")
-    ?.addEventListener("click", () => {
-      window.open(
-        "https://github.com/settings/apps",
-        "_blank",
-        "noopener,noreferrer"
+  .getElementById(
+    "algoforge-connect-github",
+  )
+  ?.addEventListener(
+    "click",
+    () => {
+      chrome.runtime.sendMessage(
+        {
+          type: "OPEN_GITHUB_CONNECT",
+        },
+        (response) => {
+          if (
+            chrome.runtime.lastError
+          ) {
+            console.error(
+              "[AlgoForge] GitHub connection error:",
+              chrome.runtime.lastError.message,
+            );
+
+            return;
+          }
+
+          if (
+            !response?.success
+          ) {
+            console.error(
+              "[AlgoForge] Unable to open GitHub connection:",
+              response?.message,
+            );
+          }
+        },
       );
-    });
+    },
+  );
 }
 
 function showGitHubRevisionPanel(): void {
@@ -1078,13 +1123,168 @@ function showGitHubRevisionPanel(): void {
     ?.addEventListener("click", renderLauncher);
 
   document
-    .getElementById("algoforge-save-github")
-    ?.addEventListener("click", () => {
-      console.log(
-        "GitHub revision requested:",
-        currentProblem
-      );
-    });
+  .getElementById("algoforge-save-github")
+  ?.addEventListener(
+    "click",
+    async () => {
+      const button =
+        document.getElementById(
+          "algoforge-save-github",
+        ) as HTMLButtonElement | null;
+
+      const problem = currentProblem;
+
+      if (!problem || !button) {
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Saving...";
+
+      try {
+        /* -----------------------------------------
+           Capture solution code
+        ----------------------------------------- */
+
+        const codeResponse =
+          await new Promise<any>(
+            (resolve) => {
+              chrome.runtime.sendMessage(
+                {
+                  type: "ANALYZE_PROBLEM",
+                  problem,
+                },
+                resolve,
+              );
+            },
+          );
+
+        if (!codeResponse?.success) {
+          throw new Error(
+            codeResponse?.message ||
+              "Unable to capture your solution code.",
+          );
+        }
+
+        const data =
+          codeResponse.data || {};
+
+        if (!data.code?.trim()) {
+          throw new Error(
+            "No solution code was found in the LeetCode editor.",
+          );
+        }
+
+        /* -----------------------------------------
+           Create Revision Vault entry
+        ----------------------------------------- */
+
+        const response =
+          await new Promise<any>(
+            (resolve) => {
+              chrome.runtime.sendMessage(
+                {
+                  type: "CREATE_REVISION_VAULT",
+
+                  payload: {
+                    problemNumber:
+                      data.problemNumber ||
+                      problem.number,
+
+                    problemTitle:
+                      data.problemTitle ||
+                      problem.title,
+
+                    difficulty:
+                      data.problemDifficulty ||
+                      problem.difficulty,
+
+                    language:
+                      data.language ||
+                      problem.language,
+
+                    problemUrl:
+                      data.url ||
+                      problem.url,
+
+                    code: data.code,
+                  },
+                },
+                resolve,
+              );
+            },
+          );
+
+        /* -----------------------------------------
+           Backend error
+        ----------------------------------------- */
+
+        if (!response?.success) {
+          throw new Error(
+            response?.message ||
+              "Unable to save revision to GitHub.",
+          );
+        }
+
+        /* -----------------------------------------
+           Success
+        ----------------------------------------- */
+
+        button.textContent = "Saved ✓";
+
+        const githubUrl =
+          response?.revision?.commitUrl ||
+          response?.revision?.repositoryUrl;
+
+        if (githubUrl) {
+          const existingLink =
+            document.querySelector(
+              ".algoforge-github-result-link",
+            );
+
+          existingLink?.remove();
+
+          const link =
+            document.createElement("a");
+
+          link.href = githubUrl;
+
+          link.target = "_blank";
+
+          link.rel =
+            "noopener noreferrer";
+
+          link.textContent =
+            "Open on GitHub";
+
+          link.className =
+            "algoforge-github-result-link";
+
+          button.insertAdjacentElement(
+            "afterend",
+            link,
+          );
+        }
+      } catch (error) {
+        console.error(
+          "[AlgoForge] Failed to save revision:",
+          error,
+        );
+
+        button.disabled = false;
+
+        button.textContent =
+          "Save to GitHub";
+
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unable to save revision.";
+
+        alert(message);
+      }
+    },
+  );
 }
 
 /* =======================================================
@@ -1280,43 +1480,6 @@ function renderProblemChangePanel(): void {
   `;
 }
 
-function normalizeProblemSlug(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function getProblemSlugFromUrl(url: string): string {
-  try {
-    const pathname = new URL(url).pathname;
-    const match = pathname.match(/^\/problems\/([^/]+)/i);
-    return match ? match[1] : "";
-  } catch {
-    return "";
-  }
-}
-
-function titleMatchesCurrentProblemUrl(
-  title: string,
-  url: string
-): boolean {
-  const slug = getProblemSlugFromUrl(url);
-
-  if (!slug || !title) {
-    return true;
-  }
-
-  const normalizedSlug = normalizeProblemSlug(slug);
-  const normalizedTitle = normalizeProblemSlug(title);
-
-  return (
-    normalizedTitle === normalizedSlug ||
-    normalizedTitle.includes(normalizedSlug) ||
-    normalizedSlug.includes(normalizedTitle)
-  );
-}
-
 function finishProblemChange(
   expectedUrl: string,
   version: number
@@ -1344,10 +1507,9 @@ function finishProblemChange(
     captureProblem();
 
   /*
-   * Wait until the new React tree is rendered. Also verify that
-   * the captured title belongs to the CURRENT URL. This is the
-   * key protection against retaining #1 Two Sum after navigating
-   * to another LeetCode problem.
+   * Wait for LeetCode's React tree to finish rendering.
+   * This prevents us from briefly capturing the previous
+   * problem or an empty title.
    */
 
   const titleLooksReady =
@@ -1357,19 +1519,12 @@ function finishProblemChange(
       "LeetCode - The World's Leading Online Programming Learning Platform";
 
   const metadataLooksReady =
-    problem.number !== "—" &&
-    problem.difficulty !== "Unknown" &&
+    problem.number !== "—" ||
+    problem.difficulty !== "Unknown" ||
     problem.language !== "Unknown";
 
-  const titleBelongsToCurrentRoute =
-    titleMatchesCurrentProblemUrl(
-      problem.title,
-      expectedUrl
-    );
-
   if (
-    !titleLooksReady ||
-    !titleBelongsToCurrentRoute ||
+    !titleLooksReady &&
     !metadataLooksReady
   ) {
     if (
@@ -1517,8 +1672,7 @@ function initialize(): void {
     getInitialTheme();
 
   /*
-   * Capture the initial problem, then take a second snapshot after
-   * LeetCode has finished mounting its React tree.
+   * Capture the initial problem immediately.
    */
 
   currentProblem =
@@ -1527,24 +1681,6 @@ function initialize(): void {
   renderLauncher();
 
   installRouteWatcher();
-
-  setTimeout(() => {
-    if (!isProblemPage()) {
-      return;
-    }
-
-    const latest = captureProblem();
-
-    if (
-      latest.title &&
-      titleMatchesCurrentProblemUrl(
-        latest.title,
-        window.location.href
-      )
-    ) {
-      currentProblem = latest;
-    }
-  }, 500);
 
   /*
    * Keep the captured metadata synchronized while the

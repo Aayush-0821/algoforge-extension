@@ -1,433 +1,586 @@
-interface ProblemPayload {
+export {};
+
+const ALGOFORGE_API_BASE = "http://localhost:5000/api";
+
+type BackgroundGitHubApiResponse = {
+  success?: boolean;
+  connected?: boolean;
+  data?: any;
+  revision?: any;
+  github?: {
+    id?: string;
+    username?: string;
+    email?: string;
+    avatarUrl?: string;
+  };
+  message?: string;
+};
+
+type RevisionVaultPayload = {
   problemNumber: string;
   problemTitle: string;
   difficulty: string;
   language: string;
+  problemUrl: string;
   code: string;
-  url: string;
-}
+};
 
-interface LeetCodeSubmission {
-  id: string;
-  statusDisplay: string;
-  lang: string;
-  runtime: number | null;
-  memory: number | null;
-  timestamp: number;
-  url: string | null;
-  isPending: boolean;
-}
+type AnalyzeProblemMessage = {
+  type: "ANALYZE_PROBLEM";
 
-interface LeetCodeSubmissionDetail {
-  id: string;
-  runtime: number | null;
-  runtimeDisplay: string | null;
-  runtimePercentile: number | null;
-  memory: number | null;
-  memoryDisplay: string | null;
-  memoryPercentile: number | null;
-  code: string | null;
-  timestamp: number;
-  statusCode: number | null;
-  statusDisplay: string | null;
-  lang: {
-    name: string;
-    verboseName: string;
-  } | null;
-  question: {
-    questionId: string;
-    questionFrontendId: string;
-    title: string;
-    titleSlug: string;
-    difficulty: string;
-  } | null;
-}
+  payload?: {
+    problemNumber?: string;
+    problemTitle?: string;
+    problemDifficulty?: string;
+    language?: string;
+    code?: string;
+    url?: string;
+  };
 
-const LEETCODE_GRAPHQL = "https://leetcode.com/graphql/";
+  problem?: {
+    number?: string;
+    title?: string;
+    difficulty?: string;
+    language?: string;
+    url?: string;
+  };
+};
 
-function log(...args: unknown[]) {
-  console.log("[AlgoForge]", ...args);
-}
-
-/**
- * Get the current LeetCode CSRF token.
- *
- * We intentionally do NOT read or send LEETCODE_SESSION
- * to the AlgoForge backend.
- */
-async function getCsrfToken(): Promise<string | null> {
-  const cookie = await chrome.cookies.get({
-    url: "https://leetcode.com/",
-    name: "csrftoken",
-  });
-
-  return cookie?.value ?? null;
-}
-
-/**
- * Make an authenticated GraphQL request to LeetCode.
- *
- * The browser supplies the logged-in LeetCode cookies through
- * credentials: "include".
- */
-async function leetcodeGraphQL<T>(
-  query: string,
-  variables: Record<string, unknown>,
-  operationName: string,
-): Promise<T> {
-  const csrfToken = await getCsrfToken();
-
-  if (!csrfToken) {
-    throw new Error(
-      "LeetCode CSRF token was not found. Make sure you are logged into LeetCode.",
-    );
-  }
-
-  const response = await fetch(LEETCODE_GRAPHQL, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "X-CSRFToken": csrfToken,
-      Referer: "https://leetcode.com/",
-    },
-    body: JSON.stringify({
-      operationName,
-      variables,
-      query,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `LeetCode GraphQL request failed with HTTP ${response.status}`,
-    );
-  }
-
-  const body = await response.json();
-
-  if (body.errors?.length) {
-    throw new Error(
-      body.errors[0]?.message || "LeetCode GraphQL request failed",
-    );
-  }
-
-  if (!body.data) {
-    throw new Error("LeetCode returned no GraphQL data");
-  }
-
-  return body.data as T;
-}
-
-/**
- * Get the current user's submissions for a problem.
- *
- * IMPORTANT:
- * questionSubmissionList is authenticated/current-user data.
- * It is NOT an arbitrary public-user history endpoint.
- */
-async function getProblemSubmissions(
-  titleSlug: string,
-): Promise<LeetCodeSubmission[]> {
-  const query = `
-    query submissionList(
-      $offset: Int!
-      $limit: Int!
-      $lastKey: String
-      $questionSlug: String!
-    ) {
-      questionSubmissionList(
-        offset: $offset
-        limit: $limit
-        lastKey: $lastKey
-        questionSlug: $questionSlug
-      ) {
-        submissions {
-          id
-          statusDisplay
-          lang
-          runtime
-          timestamp
-          url
-          isPending
-          memory
-        }
-      }
+type ExtensionMessage =
+  | {
+      type: "PING";
     }
-  `;
-
-  const data = await leetcodeGraphQL<{
-    questionSubmissionList: {
-      submissions: LeetCodeSubmission[];
+  | AnalyzeProblemMessage
+  | {
+      type: "GITHUB_STATUS";
+    }
+  | {
+      type: "OPEN_GITHUB_CONNECT";
+    }
+  | {
+      type: "CREATE_REVISION_VAULT";
+      payload: RevisionVaultPayload;
     };
-  }>(
-    query,
-    {
-      offset: 0,
-      limit: 20,
-      lastKey: null,
-      questionSlug: titleSlug,
-    },
-    "submissionList",
-  );
 
-  return data.questionSubmissionList?.submissions ?? [];
-}
+/* =======================================================
+   BACKEND API
+======================================================= */
 
-/**
- * Get full details for one submission.
- */
-async function getSubmissionDetails(
-  submissionId: string,
-): Promise<LeetCodeSubmissionDetail> {
-  const query = `
-    query submissionDetails($submissionId: Int!) {
-      submissionDetails(submissionId: $submissionId) {
-        id
-        runtime
-        runtimeDisplay
-        runtimePercentile
-        memory
-        memoryDisplay
-        memoryPercentile
-        code
-        timestamp
-        statusCode
-        statusDisplay
+async function githubBackendRequest(
+  path: string,
+  init: RequestInit = {}
+): Promise<BackgroundGitHubApiResponse> {
+  const url = `${ALGOFORGE_API_BASE}${path}`;
 
-        lang {
-          name
-          verboseName
-        }
+  console.log("[AlgoForge] Backend request starting:", {
+    url,
+    method: init.method || "GET",
+  });
 
-        question {
-          questionId
-          questionFrontendId
-          title
-          titleSlug
-          difficulty
-        }
-      }
-    }
-  `;
-
-  const data = await leetcodeGraphQL<{
-    submissionDetails: LeetCodeSubmissionDetail | null;
-  }>(
-    query,
-    {
-      submissionId: Number(submissionId),
-    },
-    "submissionDetails",
-  );
-
-  if (!data.submissionDetails) {
-    throw new Error(
-      `LeetCode did not return details for submission ${submissionId}`,
-    );
-  }
-
-  return data.submissionDetails;
-}
-
-/**
- * Extract the problem slug from a LeetCode problem URL.
- *
- * Example:
- * https://leetcode.com/problems/two-sum/
- *
- * -> two-sum
- */
-function getTitleSlug(url: string): string | null {
   try {
-    const parsed = new URL(url);
+    const response = await fetch(url, {
+      ...init,
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(init.headers || {}),
+      },
+    });
 
-    const match = parsed.pathname.match(/^\/problems\/([^/]+)/);
+    console.log("[AlgoForge] Backend response received:", {
+      status: response.status,
+      ok: response.ok,
+      url: response.url,
+    });
 
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
+    let body: BackgroundGitHubApiResponse | null = null;
 
-/**
- * Fetch authenticated submissions and their details
- * for the current LeetCode problem.
- */
-async function getAuthenticatedProblemData(
-  problem: ProblemPayload,
-): Promise<{
-  titleSlug: string;
-  submissions: LeetCodeSubmission[];
-  details: LeetCodeSubmissionDetail[];
-}> {
-  const titleSlug = getTitleSlug(problem.url);
-
-  if (!titleSlug) {
-    throw new Error("Could not determine the LeetCode problem slug.");
-  }
-
-  log("Fetching authenticated submissions for:", titleSlug);
-
-  const submissions = await getProblemSubmissions(titleSlug);
-
-  log("Found submissions:", submissions);
-
-  const details: LeetCodeSubmissionDetail[] = [];
-
-  /*
-   * Start with all returned submissions.
-   *
-   * We limit this to 20 because the query itself currently requests
-   * the latest 20 submissions.
-   */
-  for (const submission of submissions) {
     try {
-      const detail = await getSubmissionDetails(submission.id);
+      body = await response.json();
 
-      details.push(detail);
-
-      log("Fetched submission details:", submission.id);
+      console.log("[AlgoForge] Backend response body:", body);
     } catch (error) {
-      console.warn(
-        "[AlgoForge] Could not fetch submission:",
-        submission.id,
-        error,
+      console.error(
+        "[AlgoForge] Failed to parse backend response as JSON:",
+        error
       );
     }
+
+    if (!response.ok) {
+      console.error("[AlgoForge] Backend request failed:", {
+        status: response.status,
+        body,
+      });
+
+      return {
+        success: false,
+        connected: false,
+        message:
+          body?.message ||
+          `AlgoForge server returned HTTP ${response.status}`,
+      };
+    }
+
+    return body || { success: true };
+  } catch (error) {
+    console.error("[AlgoForge] Backend fetch exception:", error);
+
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Unable to connect to the AlgoForge server.",
+    };
+  }
+}
+
+/* =======================================================
+   GITHUB
+======================================================= */
+
+async function getGitHubStatus(): Promise<BackgroundGitHubApiResponse> {
+  return githubBackendRequest(
+    "/github/status",
+    {
+      method: "GET",
+    },
+  );
+}
+
+async function openGitHubConnect(): Promise<void> {
+  await chrome.tabs.create({
+    url: `${ALGOFORGE_API_BASE}/auth/github/connect`,
+  });
+}
+
+async function createRevisionVault(
+  payload: RevisionVaultPayload,
+): Promise<BackgroundGitHubApiResponse> {
+  return githubBackendRequest(
+    "/github/revision-vault",
+    {
+      method: "POST",
+
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/* =======================================================
+   ACTIVE TAB
+======================================================= */
+
+async function getActiveTabId(): Promise<number> {
+  const tabs = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+
+  const tabId = tabs[0]?.id;
+
+  if (typeof tabId !== "number") {
+    throw new Error(
+      "No active browser tab found.",
+    );
   }
 
+  return tabId;
+}
+
+/* =======================================================
+   LEETCODE CODE CAPTURE
+======================================================= */
+
+async function captureLeetCodeCode(): Promise<string> {
+  try {
+    const tabId =
+      await getActiveTabId();
+
+    const results =
+      await chrome.scripting.executeScript({
+        target: {
+          tabId,
+        },
+
+        world: "MAIN",
+
+        func: () => {
+          /* ---------------------------------------------
+             Monaco
+          --------------------------------------------- */
+
+          try {
+            const monaco =
+              (window as any).monaco;
+
+            if (
+              monaco?.editor?.getEditors
+            ) {
+              const editors =
+                monaco.editor.getEditors();
+
+              if (editors?.length) {
+                for (
+                  const editor of editors
+                ) {
+                  try {
+                    const value =
+                      editor.getValue?.();
+
+                    if (
+                      typeof value ===
+                        "string" &&
+                      value.trim()
+                    ) {
+                      return value;
+                    }
+                  } catch {
+                    // Continue.
+                  }
+                }
+              }
+            }
+          } catch {
+            // Continue to DOM fallback.
+          }
+
+          /* ---------------------------------------------
+             Monaco DOM
+          --------------------------------------------- */
+
+          try {
+            const lines =
+              Array.from(
+                document.querySelectorAll(
+                  ".monaco-editor .view-lines .view-line",
+                ),
+              );
+
+            if (lines.length) {
+              return lines
+                .map((line) =>
+                  (
+                    line.textContent ||
+                    ""
+                  ).replace(
+                    /\u00a0/g,
+                    " ",
+                  ),
+                )
+                .join("\n");
+            }
+          } catch {
+            // Continue.
+          }
+
+          /* ---------------------------------------------
+             Generic editor fallbacks
+          --------------------------------------------- */
+
+          const selectors = [
+            "textarea",
+            '[contenteditable="true"]',
+            ".view-lines",
+            ".CodeMirror-code",
+          ];
+
+          for (
+            const selector of selectors
+          ) {
+            const element =
+              document.querySelector(
+                selector,
+              );
+
+            if (!element) {
+              continue;
+            }
+
+            if (
+              element instanceof
+                HTMLTextAreaElement &&
+              element.value.trim()
+            ) {
+              return element.value;
+            }
+
+            const text =
+              element.textContent ||
+              "";
+
+            if (text.trim()) {
+              return text;
+            }
+          }
+
+          return "";
+        },
+      });
+
+    return (
+      (results?.[0]?.result as string) ||
+      ""
+    );
+  } catch (error) {
+    console.error(
+      "[AlgoForge] Failed to capture code:",
+      error,
+    );
+
+    return "";
+  }
+}
+
+/* =======================================================
+   ANALYZE PROBLEM
+======================================================= */
+
+async function handleAnalyzeProblem(
+  message: AnalyzeProblemMessage,
+  sender: chrome.runtime.MessageSender,
+): Promise<BackgroundGitHubApiResponse> {
+  const problem =
+    message.problem;
+
+  const payload =
+    message.payload;
+
+  const problemNumber =
+    payload?.problemNumber ||
+    problem?.number ||
+    "";
+
+  const problemTitle =
+    payload?.problemTitle ||
+    problem?.title ||
+    "";
+
+  const problemDifficulty =
+    payload?.problemDifficulty ||
+    problem?.difficulty ||
+    "";
+
+  const language =
+    payload?.language ||
+    problem?.language ||
+    "";
+
+  const url =
+    payload?.url ||
+    problem?.url ||
+    sender.tab?.url ||
+    "";
+
+  const code =
+    payload?.code?.trim() ||
+    (await captureLeetCodeCode());
+
+  const analysisPayload = {
+    problemNumber,
+    problemTitle,
+    problemDifficulty,
+    language,
+    code,
+    url,
+  };
+
+  console.log(
+    "[AlgoForge] ANALYZE_PROBLEM payload:",
+    analysisPayload,
+  );
+
   return {
-    titleSlug,
-    submissions,
-    details,
+    success: true,
+
+    data: analysisPayload,
   };
 }
 
-/**
- * Existing Monaco extraction.
- */
-async function getCodeFromPage(tabId: number): Promise<string> {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    func: () => {
-      try {
-        const monaco = (window as any).monaco;
+/* =======================================================
+   EXTENSION EVENTS
+======================================================= */
 
-        if (monaco?.editor?.getEditors) {
-          const editors = monaco.editor.getEditors();
+chrome.runtime.onInstalled.addListener(
+  () => {
+    console.log(
+      "[AlgoForge] Extension installed.",
+    );
+  },
+);
 
-          if (editors.length > 0) {
-            const values = editors
-              .map((editor: any) => editor.getValue?.() || "")
-              .filter(Boolean);
+chrome.runtime.onStartup.addListener(
+  () => {
+    console.log(
+      "[AlgoForge] Extension started.",
+    );
+  },
+);
 
-            if (values.length > 0) {
-              return values.join("\n");
-            }
-          }
-        }
-      } catch (error) {
-        console.warn("[AlgoForge] Monaco extraction failed", error);
-      }
+/* =======================================================
+   MESSAGE HANDLER
+======================================================= */
 
-      /*
-       * DOM fallback.
-       */
-      const lines = Array.from(
-        document.querySelectorAll(".monaco-editor .view-lines .view-line"),
-      );
-
-      if (lines.length > 0) {
-        return lines
-          .map((line) => line.textContent || "")
-          .join("\n");
-      }
-
-      return "";
-    },
-  });
-
-  return results[0]?.result || "";
-}
-
-/**
- * Message handler.
- */
 chrome.runtime.onMessage.addListener(
-  (message, sender, sendResponse) => {
-    if (message?.type !== "ANALYZE_PROBLEM") {
-      return;
-    }
+  (
+    message: ExtensionMessage,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (
+      response?: any,
+    ) => void,
+  ) => {
+    console.log(
+      "[AlgoForge] Message received:",
+      message.type,
+    );
 
-    const tabId = sender.tab?.id;
+    /* ---------------------------------------------
+       PING
+    --------------------------------------------- */
 
-    if (!tabId) {
+    if (
+      message.type === "PING"
+    ) {
       sendResponse({
-        success: false,
-        error: "No LeetCode tab found.",
+        success: true,
+        message:
+          "AlgoForge background service is running.",
       });
 
-      return;
+      return false;
     }
 
-    (async () => {
-      try {
-        const problem = message.problem as ProblemPayload;
+    /* ---------------------------------------------
+       ANALYZE PROBLEM
+    --------------------------------------------- */
 
-        log("Analyze requested:", problem);
+    if (
+      message.type ===
+      "ANALYZE_PROBLEM"
+    ) {
+      handleAnalyzeProblem(
+        message,
+        sender,
+      )
+        .then(sendResponse)
+        .catch((error) => {
+          console.error(
+            "[AlgoForge] Analysis failed:",
+            error,
+          );
 
-        /*
-         * Existing code capture.
-         */
-        const code = await getCodeFromPage(tabId);
+          sendResponse({
+            success: false,
 
-        const updatedProblem: ProblemPayload = {
-          ...problem,
-          code,
-        };
-
-        /*
-         * NEW:
-         * Get authenticated LeetCode submissions.
-         */
-        const leetcodeData =
-          await getAuthenticatedProblemData(updatedProblem);
-
-        const payload = {
-          problem: updatedProblem,
-
-          leetcode: {
-            titleSlug: leetcodeData.titleSlug,
-            submissions: leetcodeData.submissions,
-            details: leetcodeData.details,
-          },
-        };
-
-        console.log(
-          "[AlgoForge] AUTHENTICATED ANALYSIS PAYLOAD:",
-          payload,
-        );
-
-        sendResponse({
-          success: true,
-          data: payload,
+            message:
+              error instanceof Error
+                ? error.message
+                : "Analysis failed.",
+          });
         });
-      } catch (error) {
-        console.error("[AlgoForge] Analyze failed:", error);
 
-        sendResponse({
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Failed to analyze LeetCode problem.",
+      return true;
+    }
+
+    /* ---------------------------------------------
+       GITHUB STATUS
+    --------------------------------------------- */
+
+    if (
+      message.type ===
+      "GITHUB_STATUS"
+    ) {
+      getGitHubStatus()
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            success: false,
+
+            connected: false,
+
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to get GitHub status.",
+          });
         });
-      }
-    })();
 
-    return true;
+      return true;
+    }
+
+    /* ---------------------------------------------
+       OPEN GITHUB CONNECT
+    --------------------------------------------- */
+
+    if (
+      message.type ===
+      "OPEN_GITHUB_CONNECT"
+    ) {
+      openGitHubConnect()
+        .then(() => {
+          sendResponse({
+            success: true,
+          });
+        })
+        .catch((error) => {
+          sendResponse({
+            success: false,
+
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to open GitHub connection.",
+          });
+        });
+
+      return true;
+    }
+
+    /* ---------------------------------------------
+       CREATE REVISION VAULT
+    --------------------------------------------- */
+
+    if (
+      message.type ===
+      "CREATE_REVISION_VAULT"
+    ) {
+      createRevisionVault(
+        message.payload,
+      )
+        .then(sendResponse)
+        .catch((error) => {
+          console.error(
+            "[AlgoForge] Revision Vault creation failed:",
+            error,
+          );
+
+          sendResponse({
+            success: false,
+
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to create Revision Vault.",
+          });
+        });
+
+      return true;
+    }
+
+    /* ---------------------------------------------
+       UNKNOWN MESSAGE
+    --------------------------------------------- */
+
+    sendResponse({
+      success: false,
+
+      message:
+        `Unknown message type: ${
+          (message as any)?.type
+        }`,
+    });
+
+    return false;
   },
 );

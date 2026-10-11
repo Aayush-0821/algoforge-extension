@@ -2,23 +2,22 @@
   "manifest_version": 3,
   "name": "AlgoForge",
   "version": "0.1.0",
-  "description": "Capture and analyze coding problems with AlgoForge.",
+  "description": "Capture, analyze, and save coding problems with AlgoForge.",
+
   "permissions": [
     "storage",
-    "scripting",
-    "cookies"
+    "scripting"
   ],
+
   "host_permissions": [
-    "https://leetcode.com/*"
+    "https://leetcode.com/*",
+    "http://localhost:5000/*"
   ],
-  "action": {
-    "default_title": "AlgoForge",
-    "default_popup": "popup/popup.html"
-  },
+
   "background": {
-    "service_worker": "background/background.js",
-    "type": "module"
+    "service_worker": "background/background.js"
   },
+
   "content_scripts": [
     {
       "matches": [
@@ -33,6 +32,11 @@
       "run_at": "document_idle"
     }
   ],
+
+  "action": {
+    "default_title": "AlgoForge"
+  },
+
   "web_accessible_resources": [
     {
       "resources": [
